@@ -64,3 +64,4 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 }
+// Force fresh build Thu Jul 30 13:23:52 UTC 2026
