@@ -59,7 +59,8 @@ class DataStoreManager(private val context: Context) {
 
     suspend fun addCustomIp(ip: String) {
         context.dataStore.edit { preferences ->
-            val current = preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() }.toMutableList() ?: mutableListOf()
+            val ipsString = preferences[KEY_CUSTOM_IPS] ?: ""
+            val current = ipsString.split(",").filter { it.isNotBlank() }.toMutableList()
             val trimmedIp = ip.trim()
             if (trimmedIp.isNotBlank() && trimmedIp !in current) {
                 current.add(trimmedIp)
@@ -70,7 +71,8 @@ class DataStoreManager(private val context: Context) {
 
     suspend fun removeCustomIp(ip: String) {
         context.dataStore.edit { preferences ->
-            val current = preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() }.toMutableList() ?: mutableListOf()
+            val ipsString = preferences[KEY_CUSTOM_IPS] ?: ""
+            val current = ipsString.split(",").filter { it.isNotBlank() }.toMutableList()
             current.remove(ip)
             preferences[KEY_CUSTOM_IPS] = current.joinToString(",")
         }
