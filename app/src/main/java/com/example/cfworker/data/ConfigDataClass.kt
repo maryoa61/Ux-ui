@@ -42,7 +42,8 @@ class DataStoreManager(private val context: Context) {
     }
 
     val customIpsFlow: Flow<List<String>> = context.dataStore.data.map { preferences ->
-        preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() } ?: emptyList()
+        val ipsString = preferences[KEY_CUSTOM_IPS] ?: ""
+        ipsString.split(",").filter { it.isNotBlank() }
     }
 
     suspend fun saveConfig(config: ConfigDataClass) {

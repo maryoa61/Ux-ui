@@ -12,6 +12,7 @@ import com.example.cfworker.repository.CloudflareRepositoryImpl
 import com.example.cfworker.service.V2RayVpnService
 import com.example.cfworker.utils.WorkerCodeGenerator
 import com.example.cfworker.utils.XrayConfigGenerator
+import kotlinx.coroutines.channels.Semaphore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +20,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlin.math.pow
+import kotlin.math.round
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 enum class VpnState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
 
@@ -332,22 +338,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Generate sample IPs from Cloudflare CIDR ranges (limited for performance)
         private fun generateSampleIpsFromRanges(depth: String): List<String> {
             val ips = mutableListOf<String>()
-            val maxPerRange = when (depth) {
-                "quick" -> 2
-                "deep" -> 10
-                else -> 5
-            }
-        
-            for (range in cloudflareIpRanges) {
-                val parts = range.split("/")
-                val baseIp = parts[0]
-                val prefix = parts[1].toIntOrNull() ?: 24
-                val octets = baseIp.split(".").map { it.toInt() }
-            
-                // Generate sample IPs from this range
-                val hostBits = 32 - prefix
-                val maxHosts = minOf(2.0.pow(hostBits).toInt(), maxPerRange * 4)
-                val step = max(1, maxHosts / maxPerRange)
+                        val maxPerRange = when (depth) {
+                            "quick" -> 2
+                            "deep" -> 10
+                            else -> 5
+                        }
+       
+                        for (range in cloudflareIpRanges) {
+                            val parts = range.split("/")
+                            val baseIp = parts[0]
+                            val prefix = parts[1].toIntOrNull() ?: 24
+                            val octets = baseIp.split(".").map { it.toInt() }
+           
+                            // Generate sample IPs from this range
+                            val hostBits = 32 - prefix
+                            val maxHosts = minOf(Math.pow(2.0, hostBits.toDouble()).toInt(), maxPerRange * 4)
+                            val step = max(1, maxHosts / maxPerRange)
             
                 for (i in 0 until maxHosts step step) {
                     if (ips.size >= cloudflareIpRanges.size * maxPerRange) break
@@ -382,36 +388,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         
             val pings = mutableListOf<Long>()
             val maxAttempts = 3
-        
-            repeat(maxAttempts) {
-                try {
-                    val startTime = System.currentTimeMillis()
-                    val url = java.net.URL(testUrl)
-                    val conn = url.openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 3000
-                    conn.readTimeout = 3000
-                    conn.requestMethod = "HEAD"
-                    conn.instanceFollowRedirects = false
-                    conn.getInputStream().close()
-                    val rtt = System.currentTimeMillis() - startTime
-                    if (rtt <= maxPing.toLong()) pings.add(rtt)
-                } catch (e: Exception) {
-                    // Ignore failed attempts
-                }
-            }
-        
-            return if (pings.isNotEmpty()) {
-                val avgPing = pings.average().toInt()
-                val jitter = if (pings.size > 1) pings.map { (it - avgPing).toDouble().absoluteValue }.average() else 0.0
-                ScannedIp(
-                    ip = ip,
-                    ping = avgPing,
-                    jitter = kotlin.math.round(jitter * 10) / 10.0,
-                    loss = max(0, 100 - (pings.size * 100 / maxAttempts)),
-                    provider = detectProvider(ip),
-                    grade = when {
-                        avgPing < 30 -> "A+"
-                        avgPing < 50 -> "A"
+       
+                        repeat(maxAttempts) {
+                            try {
+                                val startTime = System.currentTimeMillis()
+                                val url = java.net.URL(testUrl)
+                                val conn = url.openConnection() as java.net.HttpURLConnection
+                                conn.connectTimeout = 3000
+                                conn.readTimeout = 3000
+                                conn.requestMethod = "HEAD"
+                                conn.instanceFollowRedirects = false
+                                conn.getInputStream().close()
+                                val rtt = System.currentTimeMillis() - startTime
+                                if (rtt <= maxPing.toLong()) pings.add(rtt)
+                            } catch (e: Exception) {
+                                // Ignore failed attempts
+                            }
+                        }
+       
+                        return if (pings.isNotEmpty()) {
+                            val avgPing = (pings.sum() / pings.size).toInt()
+                            val jitter = if (pings.size > 1) pings.map { abs((it - avgPing).toDouble()) }.average() else 0.0
+                            ScannedIp(
+                                ip = ip,
+                                ping = avgPing,
+                                jitter = round(jitter * 10) / 10.0,
+                                loss = max(0, 100 - (pings.size * 100 / maxAttempts)),
+                                provider = detectProvider(ip),
+                                grade = when {
+                                    avgPing < 30 -> "A+"
+                                    avgPing < 50 -> "A"
                         avgPing < 80 -> "B"
                         else -> "C"
                     },
