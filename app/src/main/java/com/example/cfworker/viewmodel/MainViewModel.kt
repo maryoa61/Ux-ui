@@ -199,95 +199,276 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- Cloudflare Clean IP Scanner Section ---
-    private val _isScanning = MutableStateFlow(false)
-    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+        private val _isScanning = MutableStateFlow(false)
+        val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
-    private val _scanProgress = MutableStateFlow(0)
-    val scanProgress: StateFlow<Int> = _scanProgress.asStateFlow()
+        private val _scanProgress = MutableStateFlow(0)
+        val scanProgress: StateFlow<Int> = _scanProgress.asStateFlow()
 
-    private val _scanStatus = MutableStateFlow("")
-    val scanStatus: StateFlow<String> = _scanStatus.asStateFlow()
+        private val _scanStatus = MutableStateFlow("")
+        val scanStatus: StateFlow<String> = _scanStatus.asStateFlow()
 
-    private val _scannedIps = MutableStateFlow<List<ScannedIp>>(emptyList())
-    val scannedIps: StateFlow<List<ScannedIp>> = _scannedIps.asStateFlow()
+        private val _scannedIps = MutableStateFlow<List<ScannedIp>>(emptyList())
+        val scannedIps: StateFlow<List<ScannedIp>> = _scannedIps.asStateFlow()
 
-    private var scanJob: Job? = null
+        // User-added custom IPs (persisted in DataStore)
+        private val _customIps = MutableStateFlow<List<String>>(emptyList())
+        val customIps: StateFlow<List<String>> = _customIps.asStateFlow()
 
-    fun startIpScanner(operator: String, port: String, depth: String, maxPing: Int) {
-        scanJob?.cancel()
-        _isScanning.value = true
-        _scanProgress.value = 0
-        _scannedIps.value = emptyList()
-        _scanStatus.value = "در حال اتصال به سرورهای توزیع‌شده کلودفلر..."
+        private var scanJob: Job? = null
 
-        val masterIpPool = listOf(
-            ScannedIp("162.159.192.83", 25, 1.1, 0, "همراه اول / ایرانسل", "عالی", "فعال"),
-            ScannedIp("162.159.136.12", 28, 0.9, 0, "ایرانسل (Bypassed)", "عالی", "فعال"),
-            ScannedIp("104.19.240.21", 32, 1.4, 0, "همراه اول / مخابرات", "عالی", "فعال"),
-            ScannedIp("104.16.51.200", 34, 1.8, 0, "تمامی اپراتورها (Enterprise)", "عالی", "فعال"),
-            ScannedIp("188.114.99.45", 36, 1.9, 0, "همراه اول (پایدار)", "خوب", "فعال"),
-            ScannedIp("188.114.97.12", 38, 2.1, 0, "مخابرات / شاتل", "خوب", "فعال"),
-            ScannedIp("172.64.155.189", 41, 2.5, 0, "ایرانسل / رایتل", "خوب", "فعال"),
-            ScannedIp("104.22.7.102", 43, 2.3, 0, "مخابرات (باندل طلایی)", "خوب", "فعال"),
-            ScannedIp("172.67.14.88", 45, 3.1, 0, "پارس آنلاین / آسیاتک", "خوب", "فعال"),
-            ScannedIp("104.21.233.209", 23, 0.8, 0, "همراه اول (پیشنهادی)", "عالی", "فعال"),
-            ScannedIp("104.26.12.143", 47, 3.2, 0, "شاتل موبایل", "خوب", "فعال"),
-            ScannedIp("104.18.3.111", 50, 3.6, 0, "مخابرات خانگی", "خوب", "فعال"),
-            ScannedIp("162.159.200.1", 29, 1.0, 0, "رایتل و سایر اپراتورها", "عالی", "فعال")
+        // Known Cloudflare IP ranges (IPv4) - subset for scanning
+        private val cloudflareIpRanges = listOf(
+            "104.16.0.0/13", "104.24.0.0/14", "104.16.0.0/12",
+            "172.64.0.0/13", "172.64.0.0/12",
+            "131.0.72.0/22", "141.101.64.0/18",
+            "108.162.192.0/18", "190.93.240.0/20",
+            "188.114.96.0/20", "197.234.240.0/22",
+            "198.41.128.0/17", "162.158.0.0/15",
+            "104.16.0.0/12", "104.24.0.0/14"
         )
 
-        scanJob = viewModelScope.launch {
-            val progressStep = if (depth == "quick") 10 else if (depth == "deep") 4 else 6
-            val tickTime = if (depth == "quick") 150L else if (depth == "deep") 300L else 200L
+        init {
+            loadCustomIps()
+        }
 
-            var p = 0
-            while (p < 100) {
-                delay(tickTime)
-                p += progressStep
-                if (p > 100) p = 100
-                _scanProgress.value = p
-
-                when (p) {
-                    20 -> _scanStatus.value = "در حال فیلتر کردن آی‌پی‌ها بر اساس اپراتور..."
-                    40 -> _scanStatus.value = "بررسی جیتر (Jitter) کانال‌های وب‌سوکت..."
-                    60 -> _scanStatus.value = "سنجش درصد دراپ پکت (Packet Loss) فعال..."
-                    80 -> _scanStatus.value = "تکمیل نهایی و مرتب‌سازی بر اساس کمترین تاخیر..."
+        private fun loadCustomIps() {
+            viewModelScope.launch {
+                dataStoreManager.customIpsFlow.collect { ips ->
+                    _customIps.value = ips
                 }
-
-                val currentLimit = (masterIpPool.size * (p / 100.0)).toInt().coerceIn(1, masterIpPool.size)
-                val filtered = masterIpPool.filter { item ->
-                    val matchesOperator = when (operator) {
-                        "mci" -> item.provider.contains("همراه")
-                        "irancell" -> item.provider.contains("ایران")
-                        "wifi_telecom" -> item.provider.contains("مخابرات") || item.provider.contains("شاتل") || item.provider.contains("پارس") || item.provider.contains("آسیاتک")
-                        else -> true
-                    }
-                    val matchesPing = item.ping <= maxPing
-                    matchesOperator && matchesPing
-                }.take(currentLimit).sortedBy { it.ping }
-
-                _scannedIps.value = filtered
             }
+        }
 
-            _scanProgress.value = 100
-            _scanStatus.value = "اسکن کامل شد! بهترین آی‌پی‌های تمیز لیست شدند."
+        fun addCustomIp(ip: String) {
+            viewModelScope.launch {
+                dataStoreManager.addCustomIp(ip.trim())
+            }
+        }
+
+        fun removeCustomIp(ip: String) {
+            viewModelScope.launch {
+                dataStoreManager.removeCustomIp(ip)
+            }
+        }
+
+        fun startIpScanner(operator: String, port: String, depth: String, maxPing: Int) {
+            scanJob?.cancel()
+            _isScanning.value = true
+            _scanProgress.value = 0
+            _scannedIps.value = emptyList()
+            _scanStatus.value = "در حال کشف رنج‌های IP کلادفلر..."
+
+            scanJob = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    // Build candidate IP list from Cloudflare ranges + custom IPs
+                    val candidates = mutableListOf<String>()
+                
+                    // Add user custom IPs first (highest priority)
+                    candidates.addAll(_customIps.value)
+                
+                    // Generate sample IPs from Cloudflare ranges (for demo, limited)
+                    val rangeSampleIps = generateSampleIpsFromRanges(depth)
+                    candidates.addAll(rangeSampleIps)
+
+                    _scanStatus.value = "تست اتصال به ${candidates.size} آی‌پی کاندید..."
+                    _scanProgress.value = 10
+
+                    val results = mutableListOf<ScannedIp>()
+                    val semaphore = kotlinx.coroutines.channels.Semaphore(if (depth == "quick") 5 else if (depth == "deep") 20 else 10)
+                
+                    val jobs = candidates.map { ip ->
+                        viewModelScope.launch {
+                            semaphore.withPermit {
+                                val result = testIpConnectivity(ip, port, maxPing)
+                                if (result != null) {
+                                    @Suppress("UNUSED_PARAMETER")
+                                    synchronized(results) { results.add(result) }
+                                }
+                            }
+                        }
+                    }
+
+                    // Update progress periodically
+                    var completed = 0
+                    while (completed < jobs.size) {
+                        delay(if (depth == "quick") 200L else 500L)
+                        completed = jobs.count { it.isCompleted }
+                        val progress = 10 + (80 * completed / jobs.size).coerceIn(0, 80)
+                        _scanProgress.value = progress
+                        _scanStatus.value = "تست شده: $completed/${jobs.size} آی‌پی..."
+                    }
+
+                    // Wait for all jobs
+                    jobs.forEach { it.join() }
+
+                    // Filter by operator preference and sort by ping
+                    val filtered = results.filter { item ->
+                        val matchesOperator = when (operator) {
+                            "mci" -> isLikelyMci(item.ip)
+                            "irancell" -> isLikelyIrancell(item.ip)
+                            "wifi_telecom" -> isLikelyTelecomWifi(item.ip)
+                            else -> true
+                        }
+                        matchesOperator && item.ping <= maxPing
+                    }.sortedBy { it.ping }
+
+                    _scannedIps.value = filtered
+                    _scanProgress.value = 100
+                    _scanStatus.value = if (filtered.isEmpty()) {
+                        "هیچ آی‌پی تمیزی با پینگ زیر ${maxPing}ms یافت نشد. عمق اسکن را افزایش دهید یا IP دستی اضافه کنید."
+                    } else {
+                        "${filtered.size} آی‌پی تمیز یافت شد. بهترین پینگ: ${filtered.first().ping}ms"
+                    }
+                    _isScanning.value = false
+
+                } catch (e: Exception) {
+                    _scanStatus.value = "خطا در اسکن: ${e.message}"
+                    _isScanning.value = false
+                }
+            }
+        }
+
+        // Generate sample IPs from Cloudflare CIDR ranges (limited for performance)
+        private fun generateSampleIpsFromRanges(depth: String): List<String> {
+            val ips = mutableListOf<String>()
+            val maxPerRange = when (depth) {
+                "quick" -> 2
+                "deep" -> 10
+                else -> 5
+            }
+        
+            for (range in cloudflareIpRanges) {
+                val parts = range.split("/")
+                val baseIp = parts[0]
+                val prefix = parts[1].toIntOrNull() ?: 24
+                val octets = baseIp.split(".").map { it.toInt() }
+            
+                // Generate sample IPs from this range
+                val hostBits = 32 - prefix
+                val maxHosts = minOf(2.0.pow(hostBits).toInt(), maxPerRange * 4)
+                val step = max(1, maxHosts / maxPerRange)
+            
+                for (i in 0 until maxHosts step step) {
+                    if (ips.size >= cloudflareIpRanges.size * maxPerRange) break
+                    val ip = calculateIpFromBase(octets, i, prefix)
+                    if (isValidPublicIp(ip)) ips.add(ip)
+                }
+            }
+            return ips.distinct().take(when (depth) { "quick" -> 30; "deep" -> 200; else -> 80 })
+        }
+
+        private fun calculateIpFromBase(baseOctets: List<Int>, offset: Int, prefix: Int): String {
+            var ipLong = (baseOctets[0] shl 24) + (baseOctets[1] shl 16) + (baseOctets[2] shl 8) + baseOctets[3]
+            // Only modify host bits
+            val hostMask = (1 shl (32 - prefix)) - 1
+            ipLong = (ipLong & ~hostMask) | (offset and hostMask)
+            return "${(ipLong ushr 24) and 0xFF}.${(ipLong ushr 16) and 0xFF}.${(ipLong ushr 8) and 0xFF}.${ipLong and 0xFF}"
+        }
+
+        private fun isValidPublicIp(ip: String): Boolean {
+            val octets = ip.split(".").map { it.toIntOrNull() ?: return false }
+            if (octets.size != 4) return false
+            // Skip private/reserved ranges
+            val first = octets[0]
+            val second = octets[1]
+            return !(first == 10 || first == 127 || (first == 172 && second in 16..31) || (first == 192 && second == 168) || first >= 224)
+        }
+
+        // Real connectivity test with HTTP HEAD to /cdn-cgi/trace
+        private fun testIpConnectivity(ip: String, port: String, maxPing: Int): ScannedIp? {
+            val targetPort = port.toIntOrNull() ?: 443
+            val testUrl = if (targetPort == 443) "https://$ip/cdn-cgi/trace" else "http://$ip:$targetPort/cdn-cgi/trace"
+        
+            val pings = mutableListOf<Long>()
+            val maxAttempts = 3
+        
+            repeat(maxAttempts) {
+                try {
+                    val startTime = System.currentTimeMillis()
+                    val url = java.net.URL(testUrl)
+                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    conn.requestMethod = "HEAD"
+                    conn.instanceFollowRedirects = false
+                    conn.getInputStream().close()
+                    val rtt = System.currentTimeMillis() - startTime
+                    if (rtt <= maxPing.toLong()) pings.add(rtt)
+                } catch (e: Exception) {
+                    // Ignore failed attempts
+                }
+            }
+        
+            return if (pings.isNotEmpty()) {
+                val avgPing = pings.average().toInt()
+                val jitter = if (pings.size > 1) pings.map { (it - avgPing).toDouble().absoluteValue }.average() else 0.0
+                ScannedIp(
+                    ip = ip,
+                    ping = avgPing,
+                    jitter = kotlin.math.round(jitter * 10) / 10.0,
+                    loss = max(0, 100 - (pings.size * 100 / maxAttempts)),
+                    provider = detectProvider(ip),
+                    grade = when {
+                        avgPing < 30 -> "A+"
+                        avgPing < 50 -> "A"
+                        avgPing < 80 -> "B"
+                        else -> "C"
+                    },
+                    status = when {
+                        avgPing < 30 -> "عالی (بدون اختلال)"
+                        avgPing < 50 -> "خوب (پایدار)"
+                        else -> "متوسط"
+                    }
+                )
+            } else null
+        }
+
+        private fun detectProvider(ip: String): String {
+            // Heuristic based on known Cloudflare PoP locations in Iran region
+            val octets = ip.split(".").map { it.toInt() }
+            val firstTwo = octets[0] * 256 + octets[1]
+        
+            return when {
+                firstTwo in 104*256+16 .. 104*256+31 -> "کلادفلر (آمریکا/اروپا)"
+                firstTwo in 172*256+64 .. 172*256+79 -> "کلادفلر (آسیا/خاورمیانه)"
+                firstTwo in 162*256+158 .. 162*256+159 -> "کلادفلر (خاورمیانه)"
+                firstTwo in 188*256+114 -> "کلادفلر (آلمان/فرانکفورت)"
+                firstTwo in 104*256+21 .. 104*256+23 -> "کلادفلر (آمریکا/شرقی)"
+                else -> "کلادفلر (معمولی)"
+            }
+        }
+
+        // Simple heuristics for Iranian operators (based on known routing)
+        private fun isLikelyMci(ip: String): Boolean {
+            val octets = ip.split(".").map { it.toInt() }
+            // MCI often routes through specific PoPs - heuristic
+            return (octets[0] == 104 && octets[1] in 16..23) || (octets[0] == 172 && octets[1] in 64..67)
+        }
+
+        private fun isLikelyIrancell(ip: String): Boolean {
+            val octets = ip.split(".").map { it.toInt() }
+            return (octets[0] == 162 && octets[1] in 158..159) || (octets[0] == 188 && octets[1] == 114)
+        }
+
+        private fun isLikelyTelecomWifi(ip: String): Boolean {
+            val octets = ip.split(".").map { it.toInt() }
+            return (octets[0] == 104 && octets[1] in 18..20) || (octets[0] == 172 && octets[1] in 68..71)
+        }
+
+        fun stopIpScanner() {
+            scanJob?.cancel()
             _isScanning.value = false
+            _scanProgress.value = 0
         }
     }
 
-    fun stopIpScanner() {
-        scanJob?.cancel()
-        _isScanning.value = false
-        _scanProgress.value = 0
-    }
-}
-
-data class ScannedIp(
-    val ip: String,
-    val ping: Int,
-    val jitter: Double,
-    val loss: Int,
-    val provider: String,
-    val grade: String,
-    val status: String
-)
+    data class ScannedIp(
+        val ip: String,
+        val ping: Int,
+        val jitter: Double,
+        val loss: Int,
+        val provider: String,
+        val grade: String,
+        val status: String
+    )

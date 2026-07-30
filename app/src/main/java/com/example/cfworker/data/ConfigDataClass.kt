@@ -27,6 +27,7 @@ class DataStoreManager(private val context: Context) {
         val KEY_CF_ACCOUNT = stringPreferencesKey("cf_account_id")
         val KEY_CF_TOKEN = stringPreferencesKey("cf_api_token")
         val KEY_CF_WORKER = stringPreferencesKey("cf_worker_name")
+        val KEY_CUSTOM_IPS = stringPreferencesKey("custom_ips")
     }
 
     val configFlow: Flow<ConfigDataClass> = context.dataStore.data.map { preferences ->
@@ -40,6 +41,10 @@ class DataStoreManager(private val context: Context) {
         )
     }
 
+    val customIpsFlow: Flow<List<String>> = context.dataStore.data.map { preferences ->
+        preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() } ?: emptyList()
+    }
+
     suspend fun saveConfig(config: ConfigDataClass) {
         context.dataStore.edit { preferences ->
             preferences[KEY_HOST] = config.host
@@ -48,6 +53,25 @@ class DataStoreManager(private val context: Context) {
             preferences[KEY_CF_ACCOUNT] = config.cfAccountId
             preferences[KEY_CF_TOKEN] = config.cfApiToken
             preferences[KEY_CF_WORKER] = config.cfWorkerName
+        }
+    }
+
+    suspend fun addCustomIp(ip: String) {
+        context.dataStore.edit { preferences ->
+            val current = preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() }.toMutableList() ?: mutableListOf()
+            val trimmedIp = ip.trim()
+            if (trimmedIp.isNotBlank() && trimmedIp !in current) {
+                current.add(trimmedIp)
+                preferences[KEY_CUSTOM_IPS] = current.joinToString(",")
+            }
+        }
+    }
+
+    suspend fun removeCustomIp(ip: String) {
+        context.dataStore.edit { preferences ->
+            val current = preferences[KEY_CUSTOM_IPS]?.split(",").filter { it.isNotBlank() }.toMutableList() ?: mutableListOf()
+            current.remove(ip)
+            preferences[KEY_CUSTOM_IPS] = current.joinToString(",")
         }
     }
 }
